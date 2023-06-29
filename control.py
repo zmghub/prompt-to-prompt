@@ -97,6 +97,8 @@ class AttentionStore(AttentionControl):
                 "down_self": [],  "mid_self": [],  "up_self": []}
 
     def forward(self, attn, is_cross: bool, place_in_unet: str):
+        if self.equalizer is not None:
+            attn = attn * self.equalizer[:, None, None, :]
         key = f"{place_in_unet}_{'cross' if is_cross else 'self'}"
         if attn.shape[1] <= 32 ** 2:  # avoid memory overhead
             self.step_store[key].append(attn.softmax(dim=-1))
@@ -121,10 +123,13 @@ class AttentionStore(AttentionControl):
         self.step_store = self.get_empty_store()
         self.attention_store = {}
 
-    def __init__(self):
+    def __init__(self, equalizer=None):
         super(AttentionStore, self).__init__()
         self.step_store = self.get_empty_store()
         self.attention_store = {}
+        self.equalizer = None
+        if equalizer is not None:
+            self.equalizer = equalizer.to(device)
 
         
 class AttentionControlEdit(AttentionStore, abc.ABC):
