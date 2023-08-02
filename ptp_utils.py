@@ -154,7 +154,6 @@ def text2image_ldm_stable(
         [""] * batch_size, padding="max_length", max_length=max_length, return_tensors="pt"
     )
     uncond_embeddings = model.text_encoder(uncond_input.input_ids.to(model.device))[0]
-    
     context = [uncond_embeddings, text_embeddings]
     if not low_resource:
         context = torch.cat(context)
@@ -225,8 +224,8 @@ def register_attention_control(model, controller):
             if self.upcast_softmax:
                 attention_scores = attention_scores.float()
 
-            attention_scores = controller(attention_scores, is_cross, place_in_unet)
             attention_probs = attention_scores.softmax(dim=-1)
+            attention_probs = controller(attention_probs, is_cross, place_in_unet)
             attention_probs = attention_probs.to(dtype)
 
             # attention_probs = self.get_attention_scores(query, key, attention_mask)

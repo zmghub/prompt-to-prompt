@@ -97,11 +97,12 @@ class AttentionStore(AttentionControl):
                 "down_self": [],  "mid_self": [],  "up_self": []}
 
     def forward(self, attn, is_cross: bool, place_in_unet: str):
-        if self.equalizer is not None:
-            attn = attn * self.equalizer[:, None, None, :]
+        if is_cross and self.equalizer is not None:
+            # print('debug: ', attn.shape, self.equalizer.shape)
+            attn = attn * self.equalizer[:, None, :]
         key = f"{place_in_unet}_{'cross' if is_cross else 'self'}"
         if attn.shape[1] <= 32 ** 2:  # avoid memory overhead
-            self.step_store[key].append(attn.softmax(dim=-1))
+            self.step_store[key].append(attn)
         return attn
 
     def between_steps(self):
@@ -241,21 +242,41 @@ def aggregate_attention(attention_store: AttentionStore, res: int, from_where: L
     out = out.sum(0) / out.shape[0]
     return out.cpu()
 
+def aggregate_attention_key(attention_store: AttentionStore, res: int, from_where: List[str], is_cross: bool, select: int, prompts_l=2):
+    attention_maps = attention_store.get_average_attention()
+    out = {}
+    num_pixels = res ** 2
+    for location in from_where:
+        count = 0
+        for item in attention_maps[f"{location}_{'cross' if is_cross else 'self'}"]:
+            if item.shape[1] == num_pixels:
+                cross_maps = item.reshape(prompts_l, -1, res, res, item.shape[-1])[select]
+                cross_maps = cross_maps.sum(0) / cross_maps.shape[0]
+                out[f"{location}_{'cross' if is_cross else 'self'}_{count}"] = cross_maps.cpu()
+            count += 1
+    return out
 
 def show_cross_attention(ldm, prompts, attention_store: AttentionStore, res: int, from_where: List[str], select: int = 0):
     tokens = ldm.tokenizer.encode(prompts[select])
     decoder = ldm.tokenizer.decode
-    attention_maps = aggregate_attention(attention_store, res, from_where, True, select, prompts_l=len(prompts))
-    images = []
-    for i in range(len(tokens)):
-        image = attention_maps[:, :, i]
-        image = 255 * image / image.max()
-        image = image.unsqueeze(-1).expand(*image.shape, 3)
-        image = image.numpy().astype(np.uint8)
-        image = np.array(Image.fromarray(image).resize((256, 256)))
-        image = ptp_utils.text_under_image(image, decoder(int(tokens[i])))
-        images.append(image)
-    ptp_utils.view_images(np.stack(images, axis=0))
+    attention_maps_all = aggregate_attention_key(attention_store, res, from_where, True, select, prompts_l=len(prompts))
+    for key, attention_maps in attention_maps_all.items():
+        images = []
+        max_value = attention_maps.max()
+        max_value = round(float(max_value), 2)
+        # attention_maps /= valid_maps.max()
+        for i in range(len(tokens)):
+            image = attention_maps[:, :, i]
+            cur_maxv = image.max()
+            cur_maxv = round(float(cur_maxv), 2)
+            image = 255 * image / cur_maxv
+            image = image.unsqueeze(-1).expand(*image.shape, 3)
+            image = image.numpy().astype(np.uint8)
+            image = np.array(Image.fromarray(image).resize((256, 256)))
+            image = ptp_utils.text_under_image(image, decoder(int(tokens[i])) +' '+ str(cur_maxv)+' '+str(max_value))
+            images.append(image)
+        print(f"view {key}")
+        ptp_utils.view_images(np.stack(images, axis=0))
     
 
 def show_self_attention_comp(prompts, attention_store: AttentionStore, res: int, from_where: List[str],
